@@ -61,7 +61,7 @@ dfMALT <- read_delim("C:/Users/sio/OneDrive - NIVA/Projekter/2025/MESH/data/malt
   mutate(GRIDCODE = tolower(GRIDCODE))
   
 
-#--------- PREPARE Biological, Chemical, Marine litter and Supporting data for MESH calculations ----
+#--------- PREPARE Biological, Chemical and Supporting data for MESH calculations ----
 
 
 #--------------- Prepare Biological (BEAT) data ---------------------
@@ -73,19 +73,23 @@ exclude_bio <- c("Secchi Depth")
 dfBioSpec <- dfBEAT %>%
   filter(!Indicator %in% exclude_bio) %>% # Remove parameters used in supporting assessment
   group_by(GRIDCODE, Group,SpeciesGroup, Species) %>%
-  summarise(EQR = mean(EQR, na.rm = TRUE))
+  summarise(EQR = mean(EQR, na.rm = TRUE),
+            n = n())
 #For species group
 dfBioSpecGrp <- dfBioSpec %>%
   group_by(GRIDCODE, Group,SpeciesGroup) %>%
-  summarise(EQR = mean(EQR, na.rm = TRUE))
+  summarise(EQR = mean(EQR, na.rm = TRUE),
+            n = sum(n))
 # For groups and pivot
 dfBio <- dfBioSpecGrp %>%
   group_by(GRIDCODE, Group) %>%
-  summarise(EQR = mean(EQR, na.rm = TRUE))
+  summarise(EQR = mean(EQR, na.rm = TRUE),
+            n = sum(n))
 # Avg EQR per gridcell
 dfBioQE <- dfBio %>%
   group_by(GRIDCODE) %>%
-  summarise(EQR = mean(as.numeric(EQR), na.rm = TRUE)) %>%
+  summarise(EQR = mean(as.numeric(EQR), na.rm = TRUE),
+            n_indi = sum(n)) %>%
   mutate(QE = "Biology") %>%
   ungroup() 
 
@@ -98,16 +102,17 @@ dfChemSub <- dfCHASEParam %>%
   summarise(EQR = mean(EQR_cat, na.rm = TRUE)) %>%
   ungroup() 
 
-
 # Avg EQR pr gridcell
 dfChemCat <- dfChemSub %>%
   group_by(GRIDCODE,Category) %>%
-  summarise(EQR = mean(EQR, na.rm = TRUE))%>%
+  summarise(EQR = mean(EQR, na.rm = TRUE),
+            n = n())%>%
   ungroup() 
 
 dfChemQE <- dfChemCat %>%
   group_by(GRIDCODE) %>%
-  summarise(EQR = mean(EQR, na.rm = TRUE)) %>%
+  summarise(EQR = mean(EQR, na.rm = TRUE),
+            n_indi = sum(n)) %>%
   ungroup() %>%
   mutate(QE = "Chemistry") # Add column for Quality Element
 ### Prepare Marine litter data
@@ -130,7 +135,8 @@ dfSupportMALT <- dfMALT %>%
 
 dfSupportQE <- bind_rows(dfSupportHEAT,dfSupportMALT) %>%
   group_by(GRIDCODE,QE) %>%
-  summarise(EQR = mean(EQR, na.rm = TRUE)) %>%
+  summarise(EQR = mean(EQR, na.rm = TRUE),
+            n_indi = n()) %>%
   ungroup()
 
 ####
@@ -139,15 +145,43 @@ dfSupportQE <- bind_rows(dfSupportHEAT,dfSupportMALT) %>%
 
 df <- bind_rows(dfSupportQE,dfChemQE,dfBioQE)
 
+df2 <- df %>%
+  group_by(GRIDCODE) %>%
+  summarise(n_thematic = n(),
+            n_bio = sum(QE == "Biology", na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Condition = ifelse(n_thematic >= 2 & n_bio >= 1, "OK", "Not OK"))
+
+# Without removing indicator or tool conditions
 df_worst_EQR <- df %>%
   group_by(GRIDCODE) %>%
-  summarise(EQR = min(EQR, na.rm = T),
-            n = n()) %>%
-  mutate(EQR=ifelse(is.infinite(EQR),NA,EQR))
+  summarise(EQR = min(EQR, na.rm = TRUE)) %>%
+  mutate(EQR=ifelse(is.infinite(EQR),NA,EQR)) %>%
+  ungroup()
+
+
+### Use of the below code is optional, depending on the conditions you want to apply for the MESH assessment. ### 
+# This is the minimum EQR value per gridcell, where at least 2 tools are available
+# df_worst_EQR <- left_join(df,df2) %>%
+#   filter(Condition == "OK") %>%
+#   group_by(GRIDCODE) %>%
+#   summarise(EQR = min(EQR, na.rm = T)) %>%
+#   mutate(EQR=ifelse(is.infinite(EQR),NA,EQR))
+
+# This is the minimum EQR value per gridcell, where at least 2 indicators are available and 2 tools with 1 biological
+# df_worst_EQR <- left_join(df,df2) %>%
+#   filter(Condition == "OK",
+#          n_indi >= 2) %>%
+#   group_by(GRIDCODE) %>%
+#   summarise(EQR = min(EQR, na.rm = T)) %>%
+#   mutate(EQR=ifelse(is.infinite(EQR),NA,EQR))
+
+#########################################################################
 
 # find the quality element responsible
 df_worst_QE <- df_worst_EQR %>%
-  left_join(df, by = c("GRIDCODE", "EQR")) 
+  left_join(df, by = c("GRIDCODE", "EQR")) %>%
+  select(GRIDCODE, QE, EQR)
 
 # if two QEs have the same worst EQR value in the same Grid cell, take only the first one
 df_worst_QE <- df_worst_QE %>%
@@ -177,15 +211,12 @@ df_MESH <- left_join(grid_minus_land, df_MESH, by = c("GRIDCODE" = "GRIDCODE")) 
     EQR < 0.2 ~ "Bad",
     is.na(EQR) ~ "No Data"
   ),
-  Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) 
-
-  
-df_MESH_sf <- df_MESH %>%
+  Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
   mutate(geometry = st_make_valid(geometry))
 
 #plot MESH map
-MESH_p <- ggplot() +
-  geom_sf(data = df_MESH_sf, aes(geometry = geometry,fill = Status)) +
+MESH_plot1 <- ggplot() +
+  geom_sf(data = df_MESH, aes(geometry = geometry,fill = Status)) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
@@ -200,7 +231,7 @@ MESH_p <- ggplot() +
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal()+
   theme(legend.position = "bottom") +  
-  labs(title = "MESH Results")
+  labs(title = "MESH Results with no conditional filtering")
 
 
 
@@ -321,7 +352,7 @@ print(plot_chemical)
 
 
 # Combine all plots into one figure
-ggarrange(MESH_p, plot_supporting, plot_biological, plot_chemical, common.legend = TRUE, legend = "bottom")
+ggarrange(MESH_plot1, plot_supporting, plot_biological, plot_chemical, common.legend = TRUE, legend = "bottom")
 # Plotting NPA and PA
 
 df_MESH_sf_category <- df_MESH_sf %>%
@@ -349,51 +380,86 @@ plot_MESH_category <- ggplot() +
   theme(legend.position = "bottom") +  
   labs(title = "Non-problem areas (NPA) and problem areas (PA) in MESH Results")
 
-### Checking the condition that atleast 2 integrated assessments most be present in a gridcell and that atleast one of those is a biological assessment
 
-
+################## With transparency #################
 df2 <- df %>%
   group_by(GRIDCODE) %>%
-  summarise(n = n(),
+  summarise(n_thematic = n(),
             n_bio = sum(QE == "Biology", na.rm = TRUE)) %>%
   ungroup() %>%
-  mutate(Condition = ifelse(n >= 2 & n_bio >= 1, "OK", "Not OK"))
+  mutate(Condition = ifelse(n_thematic >= 2 & n_bio >= 1, "OK", "Not OK"))
+
+df_MESH2 <- df_MESH %>%
+  left_join(df2, by = "GRIDCODE") %>%
+  mutate(Alpha = ifelse(Condition == "OK", 1, 0.2)) %>%
+  mutate(Alpha = ifelse(Status %in% c("No Data", "Not Included"), 1, Alpha))
+
+MESH_p4 <- ggplot() +
+  geom_sf(data = df_MESH2, aes(geometry = geometry, fill = Status, alpha = Alpha)) +
+  scale_fill_manual(
+    values = c(
+      "Bad" = "red",
+      "Poor" = "orange",
+      "Moderate" = "yellow",
+      "Good" = "green",
+      "High" = "blue",
+      "No Data" = "lightgrey",
+      "Not Included" = "azure2"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.2, 1), guide = "none") + 
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(title = "MESH Results (with 20% transparency for cells not meeting conditions)")
 
 
-df2_worst_EQR <- left_join(df,df2) %>%
-  filter(Condition == "OK") %>%
-  group_by(GRIDCODE) %>%
-  summarise(EQR = min(EQR, na.rm = T),
-            n = n()) %>%
-  mutate(EQR=ifelse(is.infinite(EQR),NA,EQR))
+df_MESH_sf_category <- df_MESH2 %>%
+  mutate(Classification = case_when(
+    Status %in% c("High", "Good") ~ "NPA",
+    Status %in% c("Moderate", "Poor", "Bad") ~ "PA",
+    Status == "No Data" ~ "No Data",
+    Status == "Not Included" ~ "Not Included"
+  )) %>%
+  mutate(Classification = factor(Classification, levels = c("NPA", "PA", "No Data", "Not Included"))) 
 
-# find the quality element responsible
-df2_worst_QE <- df2_worst_EQR %>%
-  left_join(df, by = c("GRIDCODE", "EQR")) 
+# Plotting NPA and PA
+plot_MESH_category <- ggplot() +
+  geom_sf(data = df_MESH_sf_category, aes(geometry = geometry, fill = Classification, alpha = Alpha)) +
+  scale_fill_manual(
+    values = c(
+      "NPA" = "limegreen",
+      "PA" = "firebrick",
+      "No Data" = "grey",
+      "Not Included" = "azure2"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.2, 1), guide = "none") + 
+  guides(fill = guide_legend(nrow = 1)) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +  
+  labs(title = "Non-problem areas (NPA) and problem areas (PA) in MESH Results
+       (with 20% transparency for cells not meeting conditions)")
 
-# if two QEs have the same worst EQR value in the same Grid cell, take only the first one
-df2_worst_QE <- df2_worst_QE %>%
-  group_by(GRIDCODE) %>%
-  arrange(GRIDCODE, EQR) %>%
-  slice(1) %>%
-  ungroup() %>%
-  rename(Worst = QE)
 
-# arrange QE EQR values in columns (wide)
-df2_QE <- left_join(df,df2) %>%
-  filter(Condition == "OK") %>%
-  select(GRIDCODE, QE, EQR) %>%
-  filter(!is.na(EQR)) %>%
-  pivot_wider(names_from = QE,values_from = EQR)
 
-# include columns for the final overall (worst) EQR and show the worst QE
-df2_MESH <- df2_QE %>%
-  left_join(df2_worst_QE, by = "GRIDCODE")
+####### Macaronesia #############
+macaronesia <- st_read("data/grid/grid_macaronesia/macaronesia.shp") %>%
+  mutate(GRIDCODE = tolower(GRIDCODE)) %>%
+  mutate(subregion = "Macaronesia")%>%
+  select(GRIDCODE, subregion)
 
-## make spatial
-df2_MESH <- left_join(grid_minus_land, df2_MESH, by = c("GRIDCODE" = "GRIDCODE")) %>%
+
+dfBEAT_macaronesia <- left_join(dfBEAT,macaronesia, by = "GRIDCODE") %>%
+  filter(!is.na(subregion))
+
+macaronesia_spec <- dfBEAT_macaronesia %>%
+  group_by(GRIDCODE,SpeciesGroup) %>%
+  summarise(EQR = mean(EQR),
+            n = n())
+# Create a spatial object for Macaronesia
+
+macaronesia_spec_data <- left_join(macaronesia, macaronesia_spec, by = "GRIDCODE") %>%
   mutate(Status = case_when(
-    Include == "N" ~ "Not Included",
     EQR >= 0.8 ~ "High",
     EQR >= 0.6 ~ "Good",
     EQR >= 0.4 ~ "Moderate",
@@ -401,27 +467,22 @@ df2_MESH <- left_join(grid_minus_land, df2_MESH, by = c("GRIDCODE" = "GRIDCODE")
     EQR < 0.2 ~ "Bad",
     is.na(EQR) ~ "No Data"
   ),
-  Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) 
-
-
-df2_MESH_sf <- df2_MESH %>%
-  mutate(geometry = st_make_valid(geometry))
+  Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad"))) %>%
+  st_as_sf() %>% filter(!is.na(SpeciesGroup))
 
 #plot MESH map
-MESH_p2 <- ggplot() +
-  geom_sf(data = df2_MESH_sf, aes(geometry = geometry,fill = Status)) +
+macaronesia_plot <- ggplot() +
+  geom_sf(data = macaronesia_spec_data, aes(geometry = geometry,fill = Status)) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
       "Poor" = "orange",
       "Moderate" = "yellow",
       "Good" =  "green",
-      "High" ="blue",
-      "No Data" = "lightgrey",
-      "Not Included" = "azure2"
+      "High" ="blue"
     )
   ) +
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal()+
-  theme(legend.position = "bottom") +  
-  labs(title = "MESH Results \nwith condition of at least 2 integrated assessments, where 1 is biological")
+  theme(legend.position = "bottom") +
+  facet_wrap(~SpeciesGroup, ncol = 2) 
