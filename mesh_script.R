@@ -1,7 +1,7 @@
 ## scripts for MESH project
 
 #Install and load required packages
-required_packages <- c("dplyr","ggplot2", "tidyr", "purrr", "readr","readxl",
+required_packages <- c("dplyr","ggplot2", "tidyr", "purrr", "readr","readxl","patchwork",
                        "lubridate", "stringr", "forcats", "scales","sf","gridExtra","grid","lattice","ggpubr","gt")
 
 new_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
@@ -141,10 +141,13 @@ dfSupportQE <- bind_rows(dfSupportHEAT,dfSupportMALT) %>%
 
 ####
 
-## Combining for MESH calculations
 
-df <- bind_rows(dfSupportQE,dfChemQE,dfBioQE)
 
+
+
+df <- bind_rows(dfSupportQE,dfChemQE,dfBioQE) 
+
+####
 df2 <- df %>%
   group_by(GRIDCODE) %>%
   summarise(n_thematic = n(),
@@ -158,23 +161,6 @@ df_worst_EQR <- df %>%
   summarise(EQR = min(EQR, na.rm = TRUE)) %>%
   mutate(EQR=ifelse(is.infinite(EQR),NA,EQR)) %>%
   ungroup()
-
-
-### Use of the below code is optional, depending on the conditions you want to apply for the MESH assessment. ### 
-# This is the minimum EQR value per gridcell, where at least 2 tools are available
-# df_worst_EQR <- left_join(df,df2) %>%
-#   filter(Condition == "OK") %>%
-#   group_by(GRIDCODE) %>%
-#   summarise(EQR = min(EQR, na.rm = T)) %>%
-#   mutate(EQR=ifelse(is.infinite(EQR),NA,EQR))
-
-# This is the minimum EQR value per gridcell, where at least 2 indicators are available and 2 tools with 1 biological
-# df_worst_EQR <- left_join(df,df2) %>%
-#   filter(Condition == "OK",
-#          n_indi >= 2) %>%
-#   group_by(GRIDCODE) %>%
-#   summarise(EQR = min(EQR, na.rm = T)) %>%
-#   mutate(EQR=ifelse(is.infinite(EQR),NA,EQR))
 
 #########################################################################
 
@@ -193,12 +179,13 @@ df_worst_QE <- df_worst_QE %>%
 
 # arrange QE EQR values in columns (wide)
 df_QE <- df %>%
+  select(-n_indi)%>%
   filter(!is.na(EQR)) %>%
   pivot_wider(names_from = QE,values_from = EQR)
 
 # include columns for the final overall (worst) EQR and show the worst QE
 df_MESH <- df_QE %>%
-  left_join(df_worst_QE, by = "GRIDCODE")
+  left_join(df_worst_QE)
 
 ## make spatial
 df_MESH <- left_join(grid_minus_land, df_MESH, by = c("GRIDCODE" = "GRIDCODE")) %>%
@@ -214,26 +201,135 @@ df_MESH <- left_join(grid_minus_land, df_MESH, by = c("GRIDCODE" = "GRIDCODE")) 
   Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
   mutate(geometry = st_make_valid(geometry))
 
-#plot MESH map
-MESH_plot1 <- ggplot() +
-  geom_sf(data = df_MESH, aes(geometry = geometry,fill = Status)) +
+# Plotting without transparency
+MESH_p_noTransp <- ggplot() +
+  geom_sf(data = df_MESH, aes(geometry = geometry, fill = Status)) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
       "Poor" = "orange",
       "Moderate" = "yellow",
-      "Good" =  "green",
-      "High" ="blue",
-      "No Data" = "lightgrey",
+      "Good" = "green",
+      "High" = "blue",
+      "No Data" = "grey",
+      "Not Included" = "azure2"
+    )
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 1)) +
+  labs(title = NULL)
+
+
+################## With transparency #################
+
+df_MESH2 <- df_MESH %>%
+  left_join(df2, by = "GRIDCODE") %>%
+  mutate(Alpha = ifelse(Condition == "OK", 1, 0.5)) %>%
+  mutate(Alpha = ifelse(Status %in% c("No Data", "Not Included"), 1, Alpha))
+
+MESH_p_Transp <- ggplot() +
+  geom_sf(data = df_MESH2, aes(geometry = geometry, fill = Status, alpha = Alpha)) +
+  scale_fill_manual(
+    values = c(
+      "Bad" = "red",
+      "Poor" = "orange",
+      "Moderate" = "yellow",
+      "Good" = "green",
+      "High" = "blue",
+      "No Data" = "grey",
+      "Not Included" = "azure2"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.5, 1), guide = "none") + 
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 1)) +
+  labs(title = NULL)
+
+
+MESH_comb <- MESH_p_noTransp + MESH_p_Transp + plot_layout(nrow = 1, guides = "collect") + 
+  plot_annotation(tag_levels = 'a',title = "MESH Results with (a) no transparency and (b) transparency on filtered conditions.",
+                  theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5)))& theme(legend.position = "bottom")
+
+# save
+ggsave("figures/mesh_comb.png",
+       plot = MESH_comb,
+       width = 14, height = 8, dpi = 300, bg = "white")
+
+
+##
+# Plotting NPA and PA without transparency
+
+df_MESH_category <- df_MESH %>%
+  mutate(Classification = case_when(
+    Status %in% c("High", "Good") ~ "NPA",
+    Status %in% c("Moderate", "Poor", "Bad") ~ "PA",
+    Status == "No Data" ~ "No Data",
+    Status == "Not Included" ~ "Not Included"
+  )) %>%
+  mutate(Classification = factor(Classification, levels = c("NPA", "PA", "No Data", "Not Included"))) 
+
+plot_MESH_category <- ggplot() +
+  geom_sf(data = df_MESH_category, aes(geometry = geometry, fill = Classification)) +
+  scale_fill_manual(
+    values = c(
+      "NPA" = "limegreen",
+      "PA" = "firebrick",
+      "No Data" = "grey",
       "Not Included" = "azure2"
     )
   ) +
   guides(fill = guide_legend(nrow = 1)) +
-  theme_minimal()+
+  theme_minimal() +
   theme(legend.position = "bottom") +  
-  labs(title = "MESH Results with no conditional filtering")
+  labs(title = NULL)
 
 
+# Plotting NPA and PA with transparency
+df_MESH_transp <- df_MESH %>%
+  left_join(df2, by = "GRIDCODE") %>%
+  mutate(Alpha = ifelse(Condition == "OK", 1, 0.5)) %>%
+  mutate(Alpha = ifelse(Status %in% c("No Data", "Not Included"), 1, Alpha))
+
+df_MESH_category_transp <- df_MESH_transp %>%
+  mutate(Classification = case_when(
+    Status %in% c("High", "Good") ~ "NPA",
+    Status %in% c("Moderate", "Poor", "Bad") ~ "PA",
+    Status == "No Data" ~ "No Data",
+    Status == "Not Included" ~ "Not Included"
+  )) %>%
+  mutate(Classification = factor(Classification, levels = c("NPA", "PA", "No Data", "Not Included"))) 
+
+# Plotting NPA and PA
+plot_MESH_category_transp <- ggplot() +
+  geom_sf(data = df_MESH_category_transp, aes(geometry = geometry, fill = Classification, alpha = Alpha)) +
+  scale_fill_manual(
+    values = c(
+      "NPA" = "limegreen",
+      "PA" = "firebrick",
+      "No Data" = "grey",
+      "Not Included" = "azure2"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.2, 1), guide = "none") + 
+  guides(fill = guide_legend(nrow = 1)) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +  
+  labs(title = NULL)
+
+
+GES_comb <- plot_MESH_category + plot_MESH_category_transp + plot_layout(nrow = 1, guides = "collect") + 
+  plot_annotation(tag_levels = 'a',title = "Non-problem areas (NPA) and problem areas (PA) in MESH Results with (a) no transparency and (b) transparency on filtered conditions.",
+                  theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5)))& theme(legend.position = "bottom")
+
+# save
+ggsave("figures/mesh_npa_pa_comb.png",
+       plot = GES_comb,
+       width = 14, height = 8, dpi = 300, bg = "white")
+
+
+## 
 
 # plot supporting (HEAT) indicators used in the MESH assessment
 ## Notice the supporting plot is different from the HEAT assessment, since chla and secchi are removed (INCLUDED IN BIOLOGICAL)
@@ -248,7 +344,7 @@ supporting_spatial <- left_join(grid_minus_land,dfSupportQE, by = "GRIDCODE") %>
     EQR >= 0.8 ~ "High",
     is.na(EQR) ~ "No Data"
   ),
-    Status = case_when(
+  Status = case_when(
     Include == "N" ~ "Not Included",
     TRUE ~ Status
   ),
@@ -272,7 +368,7 @@ plot_supporting <-ggplot() +
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal()+
   theme(legend.position = "bottom")+  
-  labs(title = "Supporting Indicators Results")
+  labs(title = NULL)
 
 print(plot_supporting)
 
@@ -287,13 +383,13 @@ biological_spatial <- left_join(grid_minus_land, dfBioQE, by = c("GRIDCODE" = "G
     EQR >= 0.8 ~ "High",
     is.na(EQR) ~ "No Data"
   ),
-         Status = case_when(
-           Include == "N" ~ "Not Included",
-           TRUE ~ Status
-         ),
-         Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
+  Status = case_when(
+    Include == "N" ~ "Not Included",
+    TRUE ~ Status
+  ),
+  Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
   mutate(geomtry = st_make_valid(geometry))
-  
+
 plot_biological <-ggplot() +
   geom_sf(data = biological_spatial, aes(fill = Status)) +
   scale_fill_manual(
@@ -310,7 +406,7 @@ plot_biological <-ggplot() +
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal()+
   theme(legend.position = "bottom")+
-  labs(title = "Biological Indicators Results")
+  labs(title = NULL)
 print(plot_biological)
 
 ## Plot chemical (CHASE) indicators used in the MESH assessment
@@ -323,11 +419,11 @@ chemical_spatial <- left_join(grid_minus_land, dfChemQE, by = c("GRIDCODE" = "GR
     EQR >= 0.8 ~ "High",
     is.na(EQR) ~ "No Data"
   ),
-         Status = case_when(
-           Include == "N" ~ "Not Included",
-           TRUE ~ Status
-         ),
-         Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
+  Status = case_when(
+    Include == "N" ~ "Not Included",
+    TRUE ~ Status
+  ),
+  Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
   mutate(geomtry = st_make_valid(geometry))
 
 plot_chemical <-ggplot() +
@@ -346,99 +442,28 @@ plot_chemical <-ggplot() +
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal()+
   theme(legend.position = "bottom")+
-  labs(title = "Chemical Indicators Results")
+  labs(title = NULL)
 print(plot_chemical)
 
 
 
-# Combine all plots into one figure
-ggarrange(MESH_plot1, plot_supporting, plot_biological, plot_chemical, common.legend = TRUE, legend = "bottom")
-# Plotting NPA and PA
+plot1 <- MESH_p_noTransp + labs(title = "MESH")
+plot2 <- plot_biological + labs(title = "Biological")
+plot3 <- plot_chemical + labs(title = "Chemical")
+plot4 <- plot_supporting + labs(title = "Supporting")
 
-df_MESH_sf_category <- df_MESH_sf %>%
-  mutate(Classification = case_when(
-    Status %in% c("High", "Good") ~ "NPA",
-    Status %in% c("Moderate", "Poor", "Bad") ~ "PA",
-    Status == "No Data" ~ "No Data",
-    Status == "Not Included" ~ "Not Included"
-  )) %>%
-  mutate(Classification = factor(Classification, levels = c("NPA", "PA", "No Data", "Not Included"))) 
+combined_plot <- (plot1 + plot2 + plot3 + plot4) +
+  plot_layout(nrow = 2, guides = "collect") +
+  plot_annotation(
+    title = "Results for MESH, Biological, Chemical and Supporting",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  ) &
+  theme(legend.position = "bottom")
 
-# Plotting NPA and PA
-plot_MESH_category <- ggplot() +
-  geom_sf(data = df_MESH_sf_category, aes(geometry = geometry, fill = Classification)) +
-  scale_fill_manual(
-    values = c(
-      "NPA" = "limegreen",
-      "PA" = "firebrick",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
-    )
-  ) +
-  guides(fill = guide_legend(nrow = 1)) +
-  theme_minimal() +
-  theme(legend.position = "bottom") +  
-  labs(title = "Non-problem areas (NPA) and problem areas (PA) in MESH Results")
-
-
-################## With transparency #################
-df2 <- df %>%
-  group_by(GRIDCODE) %>%
-  summarise(n_thematic = n(),
-            n_bio = sum(QE == "Biology", na.rm = TRUE)) %>%
-  ungroup() %>%
-  mutate(Condition = ifelse(n_thematic >= 2 & n_bio >= 1, "OK", "Not OK"))
-
-df_MESH2 <- df_MESH %>%
-  left_join(df2, by = "GRIDCODE") %>%
-  mutate(Alpha = ifelse(Condition == "OK", 1, 0.2)) %>%
-  mutate(Alpha = ifelse(Status %in% c("No Data", "Not Included"), 1, Alpha))
-
-MESH_p4 <- ggplot() +
-  geom_sf(data = df_MESH2, aes(geometry = geometry, fill = Status, alpha = Alpha)) +
-  scale_fill_manual(
-    values = c(
-      "Bad" = "red",
-      "Poor" = "orange",
-      "Moderate" = "yellow",
-      "Good" = "green",
-      "High" = "blue",
-      "No Data" = "lightgrey",
-      "Not Included" = "azure2"
-    )
-  ) +
-  scale_alpha_continuous(range = c(0.2, 1), guide = "none") + 
-  theme_minimal() +
-  theme(legend.position = "bottom") +
-  labs(title = "MESH Results (with 20% transparency for cells not meeting conditions)")
-
-
-df_MESH_sf_category <- df_MESH2 %>%
-  mutate(Classification = case_when(
-    Status %in% c("High", "Good") ~ "NPA",
-    Status %in% c("Moderate", "Poor", "Bad") ~ "PA",
-    Status == "No Data" ~ "No Data",
-    Status == "Not Included" ~ "Not Included"
-  )) %>%
-  mutate(Classification = factor(Classification, levels = c("NPA", "PA", "No Data", "Not Included"))) 
-
-# Plotting NPA and PA
-plot_MESH_category <- ggplot() +
-  geom_sf(data = df_MESH_sf_category, aes(geometry = geometry, fill = Classification, alpha = Alpha)) +
-  scale_fill_manual(
-    values = c(
-      "NPA" = "limegreen",
-      "PA" = "firebrick",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
-    )
-  ) +
-  scale_alpha_continuous(range = c(0.2, 1), guide = "none") + 
-  guides(fill = guide_legend(nrow = 1)) +
-  theme_minimal() +
-  theme(legend.position = "bottom") +  
-  labs(title = "Non-problem areas (NPA) and problem areas (PA) in MESH Results
-       (with 20% transparency for cells not meeting conditions)")
+## Save
+ggsave("figures/combined_plot.png",
+       plot = combined_plot,
+       width = 14, height = 10, dpi = 300, bg = "white")
 
 
 
