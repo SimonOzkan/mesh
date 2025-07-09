@@ -1,4 +1,5 @@
-## scripts for MESH project
+## MESH+ script
+# Integrating BEAT, HEAT, CHASE and MALT into three categories (Biological, Chemical and supporting)
 
 #Install and load required packages
 required_packages <- c("dplyr","ggplot2", "tidyr", "purrr", "readr","readxl","patchwork",
@@ -23,11 +24,7 @@ grid_minus_land <- st_read("data/grid/assessment grid 100x20km/assessment_grid_1
 
 ## Load EQR data for HEAT, BEAT, CHASE, dfMALTH ###
 
-                    #######Supporting (HEAT) #########
-# HEAT_int <- read_delim("data/heat/HEAT.csv",  ### Integrated HEAT is not used, since we need to exclude parameters used in BEAT
-#                                delim = ";", escape_double = FALSE, trim_ws = TRUE)%>%
-#   mutate(GRIDCODE = tolower(GRIDCODE)) 
-
+                    #######Supporting (HEAT) ########
 dfHEAT <- read_delim("data/heat/HEAT_parameter.csv", 
                        delim = ";", escape_double = FALSE, trim_ws = TRUE)%>%
   mutate(GRIDCODE = tolower(GRIDCODE)) %>%
@@ -39,19 +36,12 @@ exclude_supporting_updated <- read_delim("C:/Users/sio/OneDrive - NIVA/Projekter
   distinct(Parameter, Exclude)
 
  ######Biological (BEAT) ########
-dfBEAT2 <- read_excel("data/beat/BEAT Results.xlsx")%>% #similar to HEAT, some parameters need to be removed, since they are used as supporting
-  mutate(GRIDCODE = tolower(GRIDCODE))
-
 dfBEAT <- read_delim("C:/Users/sio/OneDrive - NIVA/Projekter/2025/MESH/data/beat/Results_Indicators_BEAT.csv", 
                      delim = ";", escape_double = FALSE, trim_ws = TRUE) %>%
   mutate(GRIDCODE = tolower(SpatialAssessmentUnit))
 
 
 ####### #Chemical (CHASE)  ########
-dfCHASE <- read_delim("data/chase/CHASE.csv", 
-                                 delim = ";", escape_double = FALSE, trim_ws = TRUE)%>%
-  mutate(GRIDCODE = tolower(GRIDCODE)) 
-
 dfCHASEParam <- read_delim("data/chase/chase_parameter.csv",
                        delim = ";", escape_double = FALSE, trim_ws = TRUE) %>%
   mutate(GRIDCODE = tolower(GridID))
@@ -141,14 +131,11 @@ dfSupportQE <- bind_rows(dfSupportHEAT,dfSupportMALT) %>%
 
 ####
 
+## Combinde the calculated indicator EQR values into one dataframe
+dfEQR_indi <- bind_rows(dfSupportQE,dfChemQE,dfBioQE) 
 
-
-
-
-df <- bind_rows(dfSupportQE,dfChemQE,dfBioQE) 
-
-####
-df2 <- df %>%
+# Use the One out all out principle on the Indicator dataframe
+df2 <- dfEQR_indi %>%
   group_by(GRIDCODE) %>%
   summarise(n_thematic = n(),
             n_bio = sum(QE == "Biology", na.rm = TRUE)) %>%
@@ -156,7 +143,7 @@ df2 <- df %>%
   mutate(Condition = ifelse(n_thematic >= 2 & n_bio >= 1, "OK", "Not OK"))
 
 # Without removing indicator or tool conditions
-df_worst_EQR <- df %>%
+df_worst_EQR <- dfEQR_indi %>%
   group_by(GRIDCODE) %>%
   summarise(EQR = min(EQR, na.rm = TRUE)) %>%
   mutate(EQR=ifelse(is.infinite(EQR),NA,EQR)) %>%
@@ -166,7 +153,7 @@ df_worst_EQR <- df %>%
 
 # find the quality element responsible
 df_worst_QE <- df_worst_EQR %>%
-  left_join(df, by = c("GRIDCODE", "EQR")) %>%
+  left_join(dfEQR_indi, by = c("GRIDCODE", "EQR")) %>%
   select(GRIDCODE, QE, EQR)
 
 # if two QEs have the same worst EQR value in the same Grid cell, take only the first one
@@ -178,7 +165,7 @@ df_worst_QE <- df_worst_QE %>%
   rename(Worst = QE)
 
 # arrange QE EQR values in columns (wide)
-df_QE <- df %>%
+df_QE <- dfEQR_indi %>%
   select(-n_indi)%>%
   filter(!is.na(EQR)) %>%
   pivot_wider(names_from = QE,values_from = EQR)
@@ -215,11 +202,22 @@ MESH_p_noTransp <- ggplot() +
       "Not Included" = "azure2"
     )
   ) +
-  theme_minimal() +
-  theme(legend.position = "bottom") +
+  # theme_minimal() +
+  # theme(legend.position = "bottom") +
+  # guides(fill = guide_legend(nrow = 1)) +
+  # theme(legend.position = "bottom",
+  #       legend.text = element_text(size = 18,face = "bold"),
+  #       axis.text = element_text(size = 18,face = "bold"),
+  #       legend.title = element_text(size = 18, face = "bold")) +  
+  # labs(title = NULL) 
   guides(fill = guide_legend(nrow = 1)) +
+  theme_minimal()+
+  theme(legend.position = "bottom")+  
   labs(title = NULL)
 
+# ggsave("figures/mesh_no_transp.png",
+#        plot = MESH_p_noTransp,
+#        width = 16, height = 14, dpi = 300, bg = "white")
 
 ################## With transparency #################
 
@@ -243,10 +241,16 @@ MESH_p_Transp <- ggplot() +
   ) +
   scale_alpha_continuous(range = c(0.5, 1), guide = "none") + 
   theme_minimal() +
-  theme(legend.position = "bottom") +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 18,face = "bold"),
+        axis.text = element_text(size = 18,face = "bold"),
+        legend.title = element_text(size = 18, face = "bold")) +  
   guides(fill = guide_legend(nrow = 1)) +
   labs(title = NULL)
 
+ggsave("figures/mesh_with_transp.png",
+       plot = MESH_p_Transp,
+       width = 16, height = 14, dpi = 300, bg = "white")
 
 MESH_comb <- MESH_p_noTransp + MESH_p_Transp + plot_layout(nrow = 1, guides = "collect") + 
   plot_annotation(tag_levels = 'a',title = "MESH Results with (a) no transparency and (b) transparency on filtered conditions.",
@@ -282,8 +286,17 @@ plot_MESH_category <- ggplot() +
   ) +
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal() +
-  theme(legend.position = "bottom") +  
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 18,face = "bold"),
+        axis.text = element_text(size = 18,face = "bold"),
+        legend.title = element_text(size = 18, face = "bold")) +  
   labs(title = NULL)
+
+# save single plot
+# ggsave("figures/mesh_npa_no_transp.png",
+#        plot = plot_MESH_category,
+#        width = 16, height = 14, dpi = 300, bg = "white")
+
 
 
 # Plotting NPA and PA with transparency
@@ -312,11 +325,19 @@ plot_MESH_category_transp <- ggplot() +
       "Not Included" = "azure2"
     )
   ) +
-  scale_alpha_continuous(range = c(0.2, 1), guide = "none") + 
+  scale_alpha_continuous(range = c(0.5, 1), guide = "none") + 
   guides(fill = guide_legend(nrow = 1)) +
   theme_minimal() +
-  theme(legend.position = "bottom") +  
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 18,face = "bold"),
+        axis.text = element_text(size = 18,face = "bold"),
+        legend.title = element_text(size = 18, face = "bold")) +  
   labs(title = NULL)
+
+
+ggsave("figures/mesh_npa_with_transp.png",
+       plot = plot_MESH_category_transp,
+       width = 16, height = 14, dpi = 300, bg = "white")
 
 
 GES_comb <- plot_MESH_category + plot_MESH_category_transp + plot_layout(nrow = 1, guides = "collect") + 
@@ -445,25 +466,26 @@ plot_chemical <-ggplot() +
   labs(title = NULL)
 print(plot_chemical)
 
+my_theme <- theme(axis.text = element_text(face = "bold", size = 18),
+                  legend.text = element_text(face = "bold", size = 18),
+                  legend.title = element_text(face = "bold", size = 18),
+                  plot.title = element_text(face = "bold", size = 18))
 
-
-plot1 <- MESH_p_noTransp + labs(title = "MESH")
-plot2 <- plot_biological + labs(title = "Biological")
-plot3 <- plot_chemical + labs(title = "Chemical")
-plot4 <- plot_supporting + labs(title = "Supporting")
+plot1 <- MESH_p_noTransp + labs(title = "MESH+")+my_theme
+plot2 <- plot_biological + labs(title = "Biological")+my_theme
+plot3 <- plot_chemical + labs(title = "Chemical")+my_theme
+plot4 <- plot_supporting + labs(title = "Supporting")+ my_theme
 
 combined_plot <- (plot1 + plot2 + plot3 + plot4) +
   plot_layout(nrow = 2, guides = "collect") +
   plot_annotation(
-    title = "Results for MESH, Biological, Chemical and Supporting",
-    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
-  ) &
-  theme(legend.position = "bottom")
-
+    title = NULL,
+    theme = theme(plot.title = element_blank(),
+                  legend.position = "bottom")) 
 ## Save
 ggsave("figures/combined_plot.png",
        plot = combined_plot,
-       width = 14, height = 10, dpi = 300, bg = "white")
+       width = 16, height = 14, dpi = 300, bg = "white")
 
 
 
