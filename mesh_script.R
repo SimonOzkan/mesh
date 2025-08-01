@@ -40,6 +40,14 @@ dfBEAT <- read_delim("C:/Users/sio/OneDrive - NIVA/Projekter/2025/MESH/data/beat
                      delim = ";", escape_double = FALSE, trim_ws = TRUE) %>%
   mutate(GRIDCODE = tolower(SpatialAssessmentUnit))
 
+## file containing integrated and one out all out on groups (i.e. final results)
+# Some GRIDCODES are not included in this file, but are available in the result indicators (which we need to calculate means)
+# There the GRIDCODES in dfBEAT is filtered to only contain those in the BEAT Results file
+BEAT_Results_grid <- read_excel("C:/Users/sio/OneDrive - NIVA/Projekter/2025/MESH/data/beat/BEAT Results.xlsx") %>%
+  mutate(GRIDCODE = tolower(GRIDCODE)) %>%
+  distinct(GRIDCODE)
+dfBEAT <- dfBEAT %>%
+  filter(GRIDCODE %in% BEAT_Results_grid$GRIDCODE)
 
 ####### #Chemical (CHASE)  ########
 dfCHASEParam <- read_delim("data/chase/chase_parameter.csv",
@@ -131,7 +139,7 @@ dfSupportQE <- bind_rows(dfSupportHEAT,dfSupportMALT) %>%
 
 ####
 
-## Combinde the calculated indicator EQR values into one dataframe
+## Combine the calculated indicator EQR values into one dataframe
 dfEQR_indi <- bind_rows(dfSupportQE,dfChemQE,dfBioQE) 
 
 # Use the One out all out principle on the Indicator dataframe
@@ -190,7 +198,7 @@ df_MESH <- left_join(grid_minus_land, df_MESH, by = c("GRIDCODE" = "GRIDCODE")) 
 
 # Plotting without transparency
 MESH_p_noTransp <- ggplot() +
-  geom_sf(data = df_MESH, aes(geometry = geometry, fill = Status)) +
+  geom_sf(data = df_MESH, aes(geometry = geometry, fill = Status),color = NA) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
@@ -198,8 +206,8 @@ MESH_p_noTransp <- ggplot() +
       "Moderate" = "yellow",
       "Good" = "green",
       "High" = "blue",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   # theme_minimal() +
@@ -223,11 +231,25 @@ MESH_p_noTransp <- ggplot() +
 
 df_MESH2 <- df_MESH %>%
   left_join(df2, by = "GRIDCODE") %>%
-  mutate(Alpha = ifelse(Condition == "OK", 1, 0.5)) %>%
-  mutate(Alpha = ifelse(Status %in% c("No Data", "Not Included"), 1, Alpha))
+  mutate(Status = case_when(
+    Include != "N" & n_thematic %in% c(1, 2) & n_bio == 0 ~ "No Data",
+    TRUE ~ Status
+  )) %>%
+  mutate(Alpha = case_when(
+    Condition == "OK" ~ 1,
+    Status %in% c("No Data", "Not Included") ~ 1,
+    TRUE ~ 0.5
+  )) %>%
+  mutate(Status = factor(Status, levels = c("High", "Good", "Moderate", "Poor", "Bad", "No Data", "Not Included")))
+
+#drop geometry and write csv file with dataframe
+# df_MESH2 <- df_MESH2 %>%
+#   select(-geometry) %>%
+#   st_drop_geometry() %>%
+#   write_csv("data/results/mesh_results.csv")
 
 MESH_p_Transp <- ggplot() +
-  geom_sf(data = df_MESH2, aes(geometry = geometry, fill = Status, alpha = Alpha)) +
+  geom_sf(data = df_MESH2, aes(geometry = geometry, fill = Status, alpha = Alpha), color = NA) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
@@ -235,8 +257,8 @@ MESH_p_Transp <- ggplot() +
       "Moderate" = "yellow",
       "Good" = "green",
       "High" = "blue",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   scale_alpha_continuous(range = c(0.5, 1), guide = "none") + 
@@ -275,13 +297,13 @@ df_MESH_category <- df_MESH %>%
   mutate(Classification = factor(Classification, levels = c("NPA", "PA", "No Data", "Not Included"))) 
 
 plot_MESH_category <- ggplot() +
-  geom_sf(data = df_MESH_category, aes(geometry = geometry, fill = Classification)) +
+  geom_sf(data = df_MESH_category, aes(geometry = geometry, fill = Classification),color = NA) +
   scale_fill_manual(
     values = c(
       "NPA" = "limegreen",
       "PA" = "firebrick",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   guides(fill = guide_legend(nrow = 1)) +
@@ -300,12 +322,8 @@ plot_MESH_category <- ggplot() +
 
 
 # Plotting NPA and PA with transparency
-df_MESH_transp <- df_MESH %>%
-  left_join(df2, by = "GRIDCODE") %>%
-  mutate(Alpha = ifelse(Condition == "OK", 1, 0.5)) %>%
-  mutate(Alpha = ifelse(Status %in% c("No Data", "Not Included"), 1, Alpha))
 
-df_MESH_category_transp <- df_MESH_transp %>%
+df_MESH_category_transp <- df_MESH2 %>%
   mutate(Classification = case_when(
     Status %in% c("High", "Good") ~ "NPA",
     Status %in% c("Moderate", "Poor", "Bad") ~ "PA",
@@ -316,13 +334,13 @@ df_MESH_category_transp <- df_MESH_transp %>%
 
 # Plotting NPA and PA
 plot_MESH_category_transp <- ggplot() +
-  geom_sf(data = df_MESH_category_transp, aes(geometry = geometry, fill = Classification, alpha = Alpha)) +
+  geom_sf(data = df_MESH_category_transp, aes(geometry = geometry, fill = Classification, alpha = Alpha), color = NA) +
   scale_fill_manual(
     values = c(
       "NPA" = "limegreen",
       "PA" = "firebrick",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   scale_alpha_continuous(range = c(0.5, 1), guide = "none") + 
@@ -349,6 +367,47 @@ ggsave("figures/mesh_npa_pa_comb.png",
        plot = GES_comb,
        width = 14, height = 8, dpi = 300, bg = "white")
 
+### Plot of which parameter was the worst (I.E the one that determined the EQR value)
+
+
+df_worst_MESH <- df_MESH2 %>%
+  st_drop_geometry(.) %>%
+  filter(!Status %in% c("Not Included", "No Data")) %>%
+  group_by(Worst) %>%
+  summarise(n=n()) %>%
+  mutate(fration = n / sum(n))
+
+
+df_worst_plot <- df_MESH2 %>%
+  mutate(Worst = if_else(Status %in% c("Not Included", "No Data"), Status, Worst)) %>%
+  mutate(Worst = factor(Worst, levels = c("Biology", "Chemistry", "Supporting", "No Data", "Not Included")))
+
+plot_test <- ggplot() +
+  geom_sf(data = df_worst_plot, aes(geometry = geometry, fill = Worst, alpha = Alpha), color = NA) +
+  scale_fill_manual(
+    values = c(
+      "Biology" = "springgreen4",
+      "Chemistry" = "blue",
+      "Supporting" = "yellow",
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.5, 1), guide = "none") + 
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 18,face = "bold"),
+        axis.text = element_text(size = 18,face = "bold"),
+        legend.title = element_text(size = 18, face = "bold")) +  
+  guides(fill = guide_legend(nrow = 1)) +
+  labs(title = NULL)
+print(plot_test)
+# save single plot
+ggsave("figures/mesh_worst_parameter.png",
+       plot = plot_test,
+       width = 16, height = 14, dpi = 300, bg = "white")
+
+
 
 ## 
 
@@ -374,7 +433,7 @@ supporting_spatial <- left_join(grid_minus_land,dfSupportQE, by = "GRIDCODE") %>
 
 
 plot_supporting <-ggplot() +
-  geom_sf(data = supporting_spatial, aes(fill = Status)) +
+  geom_sf(data = supporting_spatial,aes(fill = Status),color = NA ) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
@@ -382,8 +441,8 @@ plot_supporting <-ggplot() +
       "Moderate" = "yellow",
       "Good" =  "green",
       "High" ="blue",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   guides(fill = guide_legend(nrow = 1)) +
@@ -411,8 +470,9 @@ biological_spatial <- left_join(grid_minus_land, dfBioQE, by = c("GRIDCODE" = "G
   Status = factor(Status, levels = c("High", "Good","Moderate", "Poor","Bad",  "No Data","Not Included"))) %>%
   mutate(geomtry = st_make_valid(geometry))
 
+
 plot_biological <-ggplot() +
-  geom_sf(data = biological_spatial, aes(fill = Status)) +
+  geom_sf(data = biological_spatial, aes(fill = Status),color = NA) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
@@ -420,8 +480,8 @@ plot_biological <-ggplot() +
       "Moderate" = "yellow",
       "Good" =  "green",
       "High" ="blue",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   guides(fill = guide_legend(nrow = 1)) +
@@ -448,7 +508,7 @@ chemical_spatial <- left_join(grid_minus_land, dfChemQE, by = c("GRIDCODE" = "GR
   mutate(geomtry = st_make_valid(geometry))
 
 plot_chemical <-ggplot() +
-  geom_sf(data = chemical_spatial, aes(fill = Status)) +
+  geom_sf(data = chemical_spatial, aes(fill = Status),color = NA ) +
   scale_fill_manual(
     values = c(
       "Bad" = "red",
@@ -456,8 +516,8 @@ plot_chemical <-ggplot() +
       "Moderate" = "yellow",
       "Good" =  "green",
       "High" ="blue",
-      "No Data" = "grey",
-      "Not Included" = "azure2"
+      "No Data" = "grey91",
+      "Not Included" = "azure3"
     )
   ) +
   guides(fill = guide_legend(nrow = 1)) +
@@ -471,7 +531,7 @@ my_theme <- theme(axis.text = element_text(face = "bold", size = 18),
                   legend.title = element_text(face = "bold", size = 18),
                   plot.title = element_text(face = "bold", size = 18))
 
-plot1 <- MESH_p_noTransp + labs(title = "MESH+")+my_theme
+plot1 <- MESH_p_Transp + labs(title = "MESH+")+my_theme
 plot2 <- plot_biological + labs(title = "Biological")+my_theme
 plot3 <- plot_chemical + labs(title = "Chemical")+my_theme
 plot4 <- plot_supporting + labs(title = "Supporting")+ my_theme
